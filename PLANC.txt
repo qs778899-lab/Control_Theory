@@ -1,0 +1,603 @@
+                                                                                                                                                                                              1
+
+
+
+
+                                           Walk the PLANC: Physics-Guided RL for Agile
+                                           Humanoid LocomotioN on Constrained Footholds
+                                                           Min Dai1 , William D. Compton2 , Junheng Li1 , Lizhi Yang1 , and Aaron D. Ames1,2
+                                                                             Project Website: https:// caltech-amber.github.io/ planc/
+                                           Abstract—Bipedal humanoid robots must precisely coordinate
+                                        balance, timing, and contact decisions when locomoting on con-
+                                        strained footholds such as stepping stones, beams, and planks—
+                                        even minor errors can lead to catastrophic failure. Classical
+                                        optimization and control pipelines handle these constraints well
+                                        but depend on highly accurate mathematical representations of
+                                        terrain geometry, making them prone to error when perception
+arXiv:2601.06286v1 [cs.RO] 9 Jan 2026
+
+
+
+
+                                        is noisy or incomplete. Meanwhile, reinforcement learning has
+                                        shown strong resilience to disturbances and modeling errors, yet
+                                        end-to-end policies rarely discover the precise foothold placement
+                                        and step sequencing required for discontinuous terrain. These
+                                        contrasting limitations motivate approaches that guide learning
+                                        with physics-based structure rather than relying purely on
+                                        reward shaping. In this work, we introduce a locomotion frame-
+                                        work in which a reduced-order stepping planner supplies dynam-
+                                        ically consistent motion targets that steer the RL training process
+                                        via Control Lyapunov Function (CLF) rewards. This combination
+                                        of structured footstep planning and data-driven adaptation pro-
+                                        duces accurate, agile, and hardware-validated stepping-stone lo-
+                                        comotion on a humanoid robot, substantially improving reliabil-
+                                        ity compared to conventional model-free reinforcement-learning
+                                        baselines. The entire open-sourced code base is available at
+                                        https://anonymous.4open.science/r/robot rl-E4FF, and the sup-
+                                        plementary video is provided at https://youtu.be/D CZ FRYjtc.
+
+
+                                                                                                                   Fig. 1. Model-guided RL traversing constrained footholds on the Unitree G1
+                                                               I. I NTRODUCTION                                    humanoid robot. The policy is trained with environmentally consistent refer-
+                                                                                                                   ences generated dynamically during training by a momentum-regulated linear
+                                           Achieving robust and adaptive bipedal locomotion over dis-              inverted pendulum for precise footstepping and center of mass regulation, and
+                                        crete footholds such as stepping stones remains a fundamental              is deployed successfully on hardware.
+                                        challenge in legged robotics. These conditions are critically
+                                                                                                                   optimization problem with explicit kinematic and foothold
+                                        relevant for humanoid robots deployed in disaster zones or
+                                                                                                                   constraints [4], or solved through sampling-based methods
+                                        cluttered industrial environments, where viable contact regions
+                                                                                                                   for safe and efficient foot-step generation [5]. Instead of
+                                        are sparse, discontinuous, and bounded by strict safety mar-
+                                                                                                                   optimizing over the footstep locations, offline gait libraries
+                                        gins. Unlike traversing continuous rough terrain, where small
+                                                                                                                   generated with full order models [6] can be used with control
+                                        foot placement errors can often be tolerated, stepping-stone
+                                                                                                                   barrier functions (CBFs) to modulate foot placement during
+                                        environments impose hard constraints on contact location
+                                                                                                                   execution [7], [8]. More recently, researchers have begun to
+                                        and timing. A single misstep or localized slip can lead to
+                                                                                                                   unify footstep planning and locomotion control within a single
+                                        unrecoverable failure, making full-body motion coordination
+                                                                                                                   optimization framework, enabling simultaneous reasoning over
+                                        significantly more challenging.
+                                                                                                                   control actions and footstep locations [9], [10], [11]. While
+                                           Traditionally, terrain-aware locomotion has been ap-
+                                                                                                                   promising, these non-convex formulations impose substantial
+                                        proached through model-based control strategies that prioritize
+                                                                                                                   computational demands and remain challenging on high–DoF
+                                        physical consistency and safety constraints. In one school
+                                                                                                                   humanoid robots over discrete terrains. Consequently, many
+                                        of thought, the challenge of adapting to discrete terrain is
+                                                                                                                   valid approaches are restricted to quasi-static motions [12].
+                                        delegated to a dedicated footstep planner with quasi-static
+                                                                                                                      Furthermore, a primary bottleneck for model-based methods
+                                        walking, often built on reduced-order models (RoMs) such
+                                                                                                                   lies in the integration of perception. The terrain dependency
+                                        as the Linear Inverted Pendulum (LIP) [1] and centroidal
+                                                                                                                   necessitates a rigorous terrain segmentation and state estima-
+                                        dynamics [2], [3]. Within this hierarchical structure, ter-
+                                                                                                                   tion pipeline [13]. In practice, purely model-based locomotion
+                                        rain reasoning can be explicitly encoded as a mixed-integer
+                                                                                                                   pipelines are already fragile, as they rely on highly accurate
+                                          1 Authors are with the Department of Mechanical and Civil Engineering,
+                                                                                                                   modeling and state feedback. Extracting precise mathemati-
+                                        California Institute of Technology, Pasadena, CA 91125.                    cal representations for terrain geometry and foothold repre-
+                                          2 Authors are with the Department of Computing and Mathematical Sci-
+                                        ences, California Institute of Technology, Pasadena, CA 91125.             sentations from noisy point clouds adds additional latency,
+                                          This research is supported by Technology Innovation Institute (TII).     uncertainty, complexity, and conservatism, as even minor
+                                                                                                                                                            2
+
+
+
+
+Fig. 2. A visual depiction of the model-guided RL architecture used to achieve stepping stones. The left column shows the four terrains trained in simulation,
+(top to bottom) stairs up, stairs down, flat stones, and height varying stones. Training is carried out in a teach-student fashion, with CLF rewards informed
+by the RoM. The student policy is successfully deploy in sim-to-sim transfer and on hardware.
+
+segmentation or odometry errors can cause the planner to                        the fundamentals of walking.
+impose invalid constraints [14]. This dependence on clean,                        The core contributions of this work are the following,
+structured sensor data places unreasonably heavy demands on                       • We propose a physics-guided reinforcement learning
+the perception module and makes it difficult to deploy pure                          framework that tightly integrates a reduced-order, terrain-
+model-based approaches in unstructured environments.                                 aware bipedal stepping-stone planner with CLF-based
+   Conversely, deep reinforcement learning (RL) has emerged                          rewards design into the RL training loop, outlined in Fig.
+as a powerful alternative, demonstrating the ability to gener-                       2. The framework generates terrain-consistent references
+ate robust locomotion directly from high-dimensional sensor                          for constrained foot placement, CoM trajectory, and step
+data, including height maps. RL policies naturally integrate                         timing for RL training with minimal computation over-
+proprioception and exteroception, learning robust behaviors                          head, enabling agile and safe locomotion over discrete
+that generalize to hardware deployment. However, standard                            aperiodic terrains.
+RL pipelines often prioritize survival over precision. While                      • We remove the dependency and extended efforts on hu-
+successful on continuous rough terrain [15], [16], these meth-                       man motion dataset collections and retargeting pipelines
+ods struggle with the sparse foothold task, where precise end-                       in a multi-environment generalist locomotion policy. The
+effector control is paramount.                                                       model guidance provides a physically grounded, con-
+   Early attempts to bridge this gap incorporated ground-truth                       trollable, and transferable prior for RL in severely con-
+terrain information directly into the RL observation space to                        strained environments.
+                                                                                  • Our approach is both numerically and experimentally
+guide foot placement [17], thus limited to simulation with
+perfect step knowledge. [18] focused on structured environ-                          validated on the Unitree G1 humanoid robot over ran-
+ments like stairs, but demonstrated limited foot placement                           domized stepping-stone terrains with gap and height
+accuracy and lacked real-world validation. More recently,                            variances, demonstrating improved stability, precise foot
+vision-based RL has achieved hardware deployment [19], [20],                         placement, generalization to unseen terrain, and consis-
+[21], but these policies frequently exhibit low success rates                        tent performance gains over model-free baselines.
+in sparse-contact scenarios. Furthermore, unconstrained end-
+                                                                                                          II. P RELIMINARIES
+to-end approaches [22], [23] often exploit reward structures
+to maximize stability at the cost of motion quality, resulting                  A. Bipedal Robot Hybrid Dynamics
+in unnatural or period-two gaits. These methods can also                           A bipedal robot can be modeled as a hybrid dynamical
+be computationally prohibitive, with architectures like [23]                    system Σ = (D, U, G, ∆, f, g), where D denotes the set of
+requiring days of training.                                                     continuous domains, U ⊂ Rnu is the control input space,
+   The dichotomy is clear: model-based control excels at                        G ⊂ D represents the guards corresponding to impact events,
+planning feasible motion under strict constraints (timing and                   ∆ : G → D defines the discrete reset map, and f, g define
+placement) but is brittle to uncertainty; RL excels at robust                   the continuous dynamics. Let x = [q ⊤ , q̇ ⊤ ]⊤ ∈ T Q where q
+execution under uncertainty but struggles to discover precise,                  is the generalized coordinate, the hybrid system’s dynamics is
+constrained motions from scratch. This suggests that relying                    given by:
+solely on reward engineering to induce precise stepping is
+                                                                                            (
+                                                                                              ẋ    = f (x) + g(x)τ x ∈ D \ G,
+inefficient. There is a growing consensus toward guided RL,                                                                                (1)
+where structured human trajectory references [24], [25] or                                    x +
+                                                                                                    = ∆(x− )            x− ∈ G.
+model-based references [26], [27], [28], [29] constrain the
+learning manifold. By shaping the learning process around                       B. Reduced Order Models for Underactuated Dynamics
+feasible reference motions, RL can focus on refining contact                      Bipedal walking is inherently underactuated, even with
+dynamics and disturbance rejection rather than rediscovering                    ankle actuation. The horizontal CoM cannot be arbitrarily
+                                                                                                                                                   3
+
+
+
+                                                                                 where (p0 , L0 ) is the initial state at the beginning of the step.
+                                                                                 This closed-form trajectory allows us to analytically compute
+                                                                                 the step duration T required for the CoM to reach a target
+                                                                                 switching state p(T ) = ϵldes , where ldes is the distance to the
+                                                                                 next stepping stone from the current stance foot, as depicted
+                                                                                 in Fig. 3. This calculation ensures precise timing regulation
+                                                                                 over non-uniform footholds, which has proven crucial in the
+                                                                                 literature [30], [31].
+                                                                                 Impact and Angular Momentum Reset Map: The robot’s
+                                                                                 hybrid dynamics involve discrete changes at foot impact. At
+                                                                                 impact, the swing foot makes contact and becomes the new
+                                                                                 stance foot. Assuming instantaneous, inelastic impact and no
+                                                                                 slipping, the angular momentum about the new contact point
+                                                                                 is reset as:
+                                                                                                  L+ = L− + xsw żcom
+                                                                                                                  −
+                                                                                                                      − zsw ṗ− ,               (5)
+Fig. 3. A visual depiction of the LIP model used for gait synthesis, including
+the desired trajectories for the swing foot psw and CoM pcom .                   where (xsw , zsw ) is the position of the swing foot before im-
+                                                                                 pact, and ṗ− , żcom
+                                                                                                   −
+                                                                                                       are the CoM velocities just prior to impact.
+regulated, especially at moderate or high speeds. For example,                   Critically, this map reveals that for a fixed foothold psw ,
+when a human leans forward, it does not take long before the                     the post-impact momentum L+ can be actively regulated by
+center of pressure reaches the edge of the foot, prompting                                                                       −
+                                                                                 modulating the pre-impact vertical velocity żcom   . We leverage
+a step to prevent falling. To capture this dynamic tendency,                     this relationship to ensure the post-impact state always lies on
+the passive-ankle LIP model is commonly used. As shown in                        the viable manifold defined by E ∗ .
+Fig. 3, we model the varying height stepping stones as virtual
+slopes by connecting the centers of the consecutive stones.                      C. Nonlinear Output Dynamics and Control
+   The LIP assumes the robot’s CoM moves at constant height                         Let y = h(q) ∈ Rny denote the set of controllable outputs
+relative to the virtual
+                      slope
+                           T along a massless leg with no ankle                 (e.g., CoM position, torso orientation, swing foot pose). For
+torque. Let x = p L            represent the state vector, where                 relative degree two outputs, the output dynamics satisfy
+p is the CoM position relative to the stance foot and L is
+the mass-normalized angular momentum about the stance foot.                                     ÿ = L2f h(q, q̇) + Lg Lf h(q, q̇)τ ,           (6)
+The sagittal-plane LIP dynamics can be expressed as:                             To ensure exponential convergence of outputs, we define a
+                            
+                        d p        0 z10 p
+                                                                              Control Lyapunov Function (CLF)
+                  ẋ =          =               .            (2)                                                    a
+                                                                                                                     y − yd
+                                                                                                                               
+                        dt L       g 0 L                                                            1 ⊤
+                                                                                            V (η) = η P η, η = a                 ,     (7)
+                                                                                                    2                ẏ − ẏ d
+Here, z0 is the constant vertical height of the CoM, and g
+is the gravitational acceleration. This linear system captures                   with P > 0 obtained from a continuous-time algebraic Riccati
+the underactuated evolution of the CoM state during single                       equation (CARE). The CLF decreasing condition
+support, where momentum is generated solely by gravity-                                                  V̇ (η) ≤ −cV (η)                       (8)
+induced torques about the stance foot.
+Orbital Energy and Step Viability: A key property of the                         is typically enforced through a quadratic program (QP) to
+LIP dynamics in (2) is the conservation of orbital energy,                       compute the control input τ that provides an exponential
+defined as:                                                                      tracking condition on the output dynamics while satisfying
+                  2                         r                                  the constrained dynamics and respecting the torque limit and
+                   L         2 2                 g                               contact constraints. In this work, CLF is directly embedded in
+            E=           − λ p , with λ =           .      (3)
+                   z0                            z0                              the RL training as rewards as in [29].
+The orbital energy E partitions the state space into regions
+of viable motion: E > 0 corresponds to states with suffi-                        D. Reinforcement Learning
+cient momentum to carry the CoM past midstance (forward                             We formulate the task of sparse foothold traversal as a par-
+walking), while E < 0 indicates bounded oscillations. Each                       tially observable Markov decision process (POMDP), defined
+orbital energy level defines a manifold of valid trajectories                    by the tuple M = (S, A, O, T , Z, R, γ), where S is the set of
+with varying boundary conditions. We leverage this property                      states, A is the set of actions, O is the set of observations from
+for stepping stones by selecting a target E ∗ that ensures                       proprioception and perception, T (s′ |s, a) is the state transition
+forward progression.                                                             probability, Z(o|s) is the observation likelihood, R(s, a) is
+Step Timing via Time-to-Impact: Given the linear structure                       the instantaneous reward function and γ ∈ [0, 1] is the discount
+of (2), the CoM evolution admits a closed-form solution:                         factor. The agent seeks to maximize the expected return
+                                                                                                                     " T        #
+                                           1                                                                           X
+                                                                                                                             t
+              p(t) = cosh(λt) p0 +            sinh(λt) L0 ,               (4)                      J(πθ ) = Eπ∼πθ          γ rt ,                (9)
+                                          λz0
+                                                                                                                      t=0
+                                                                                                                                          4
+
+
+
+where πθ (at |st ) is the stochastic policy parameterized by θ.        calculated using the momentum transfer law derived from
+Proximal Policy Optimization (PPO): We use PPO [32] to                 the underactuated robot dynamics as in Eq. (5). The desired
+optimize both the teacher and student policies. PPO improves           vertical velocity udes is calculated based on the required
+training stability by constraining the policy update through a         change in angular momentum and the stone configuration:
+clipped surrogate objective:                                                                 1
+               h                                         i                      udes =          (L̂des − L̂−            ˆ−
+                                                                                                              y (x) + hdes ẋcom ),   (12)
+  LPPO = Et min ρt (θ)Ât , clip ρt (θ), 1 − ϵ, 1 + ϵ Ât ,                                 ldes
+                                                               (10)    where ˆ· is used to denote the estimation of a parameter using
+where ρt (θ) = πθπθ (a(at |s  t)
+                           t |st )
+                                   is the importance sampling ratio    LIP dynamics and L̂des corresponds to the desired orbital
+                    old
+                                                                       energy E ∗ at post-impact. The estimation of pre-impact under-
+and Ât is the advantage estimate.
+                                                                       actuated states x̂−          −
+                                                                                         com and L̂y is performed using LIP solution
+Teacher-Student Distillation: To improve learning under
+                                                                       given the time-to-impact. Other pre-impact states, including
+partial observability, we adopt a teacher-student framework.             −        ˆ−
+                                                                       zcom  and ẋcom are approximated by weighted averages of the
+The teacher’s policy πT (at |ot , opriv
+                                   t ) has access to privileged        desired pre-impact ones and the current ones.
+information such as ground-truth terrain and contact phase.
+                                                                       CoM Translation Reference: For CoM motion, we replace
+During each environment step, both the teacher policy and the
+                                                                       the MPC-style planner used in prior model-based work [9]
+student policy πs (at |ot ) compute their respective actions. The
+                                                                       with closed-form cubic splines that provides smooth references
+student is then trained to match the teacher’s output using a
+                                                                       inside the RL training loop. The splines are parameterized
+per-step supervised behavior cloning loss:
+                                                                       by the phasing variable s = Tts ∈ [0, 1), ensuring time-
+                        
+                                              priv
+                                                   2
+                                                                      normalized trajectories across different step durations. The
+           Ldistill = Et πs (ot ) − πT (ot , ot )      .      (11)     coefficients are obtained by enforcing boundary conditions on
+                                                                       position and velocity at the beginning and end of each step.
+During distillation, the student policy minimizes this loss over       The vertical spline boundaries are set to satisfy momentum
+on-policy rollouts. After distillation, the student is further fine-   regulation, while the sagittal spline connects the current state
+tuned using PPO to adapt to the partially observed setting             to a target end-of-step state derived analytically from the
+and improve robustness under noise. This two-stage training            desired orbital energy E ∗ . To ensure lateral balance, the refer-
+procedure allows us to deploy a policy that retains the teacher’s      ence follows the analytical solution of the HLIP model [33],
+precision without relying on privileged inputs, and is espe-           directly mapping the planner’s desired velocity and position
+cially useful when standard asymmetric actor-critic approaches         to the training reference.
+fail to converge due to high information asymmetry.                    Swing Foot Translation Reference: The swing-foot trajec-
+                                                                       tory is generated by interpolating between the lift-off state
+       III. M ODEL -BASED R EFERENCE G ENERATION                       and a target foothold using Bézier polynomials for all three
+   As shown in Fig. 2, our control approach integrates a model-        dimensions. The target xsw and zsw are strictly determined
+based locomotion planner with a teacher-student learning               by the geometry of the upcoming stepping stone. The lateral
+framework. First, a reduced-order walking model is used to             target wdes is produced by the HLIP reference to regulate step
+plan dynamically and environmentally consistent reference              width. The final trajectory evolves as:
+trajectories for each time step (foot placement, center-of-mass                d
+                                                                           x, ysw (s) = (1 − bh (s))x, ysw (x+ ) + bh (s)l, wdes ,    (13)
+trajectory, and step timing). Second, a multi-stage teacher-                   d
+                                                                              zsw (s) = bv (s),                                       (14)
+student RL pipeline leverages these references. This sections
+detail the model-based planner and how it guides the RL                where bh and bv are sets of Bézier polynomials [6]. The
+training process.                                                      coefficients of bh are [0, 0, 0, 13 ], where 1N indicates a row
+Step Time: Our planner builds upon the underactuated LIP               vector of size N with all elements being 1. The coefficients
+model as in Sec. II. The step duration, Ts , is determined             of bv are [zsw (x+ ), zsw
+                                                                                              max                            max
+                                                                                                  13 , hdes , hdes ], where zsw  determines
+analytically based on the current post-impact state x+ and the         the swing clearance and is computed from the maximum
+required forward displacement ldes to the upcoming stepping            height of the previous, current, and upcoming stones with an
+stone as shown in Fig. 3. Ts is solved from the closed-form            added safety margin.
+solution of the LIP dynamics, which specifies the time required        Other References: To ensure stable contact and natural
+for the horizontal CoM position to reach a target pre-impact           posture, the reference orientation for both the pelvis and the
+location [9], xdcom = ϵldes , where ϵ ∈ (0, 1). In this work, we       swing foot is aligned with the local terrain heading. Simulta-
+used ϵ = 0.6. This process dynamically updates step timing,            neously, the arm joints track a nominal, phase-synchronized
+rather than relying on interpolation among gait libraries or           reference trajectory to aid in angular momentum cancellation
+fixed timing assumptions.                                              and generate naturalistic gait dynamics.
+Orbital Energy Regulation using Vertical CoM Reference:                   Collectively, this planner functions as a real-time reference
+We regulate the post-impact orbital energy in the sagittal             generator, producing a full state trajectory at every time step.
+plane E + to a desired E ∗ = 0.6 through regulating the                This includes the desired output y d , the actual output y a , and
+momentum Ly at impact. In particular, we regulate the desired          holonomic constraint information. The tracked outputs include
+                                              −
+pre-impact vertical CoM velocity, udes = żcom    as in [9]. This      CoM position and velocity, swing-foot position and velocity,
+target velocity acts as a discrete input to the hybrid system,         pelvis and swing-foot orientation and angular velocity, and
+                                                                                                                                        5
+
+
+
+upper-body joint states. The holonomic constraints contain                To enable stable learning on challenging foothold arrange-
+stance-foot position, velocity, orientation, and angular veloc-        ments, we implement a curriculum that adjusts terrain diffi-
+ity, ensuring that ground-contact conditions remain consistent         culty automatically based on task performance. At the end
+throughout single support. In the subsequent training phase,           of each episode, the environment evaluates whether the robot
+these trajectories are used throughout training to define CLF-         successfully traversed the terrain. A terrain level advances
+based rewards, enforce CLF decreasing conditions, and incor-           only after three consecutive successful traversals, preventing
+porate holonomic and holonomic-velocity constraints within             noisy or accidental successes from triggering progression. The
+the RL objective [29].                                                 curriculum is monotonic: once an environment moves to a
+                                                                       higher difficulty level, it never regresses. Because higher levels
+            IV. L EARNING E NVIRONMENT S ETUP                          sample from a wider parameter space that still includes easier
+   To effectively leverage the model-based references de-              configurations, the agent continues to experience a mix of
+scribed in III, the training framework operates hierarchically.        difficulties while steadily shifting toward more challenging
+The reduced-order model functions as a high-level stepping-            foothold patterns. This approach ensures smooth progression
+stone planner, dictating the step timing Ts and dynamic targets        and encourages the emergence of robust, generalizable loco-
+udes . The RL policy then serves as a low-level, high-frequency        motion behaviors across the entire terrain family.
+controller that learns the residual full-body dynamics neces-
+sary to robustly track these targets on the high-DoF humanoid
+                                                                       B. Training Framework
+model. This fusion combines the strengths of both paradigms:
+the model-based planner generates references consistent with              The CLF-based reward formulation is inherently phase-
+environmental constraints, while the RL policy handles un-             dependent, aligning with terrain structure and command se-
+modeled dynamics (e.g., friction, compliance) and minimizes            quences. However, this phase information is unavailable at de-
+tracking errors using the full robot actuation capabilities.           ployment, preventing its direct use in the student’s observation
+This hybrid approach mitigates the brittleness of pure model-          space. Furthermore, we observed that a standard asymmetric
+based control while significantly improving sample efficiency          actor-critic setup—where only the critic has access to privi-
+compared to model-free baselines as in [22], [23], which often         leged information—failed to converge on the stepping stone
+struggle to discover precise stepping strategies from scratch.         task. The optimization landscape for such precise, sparse-
+                                                                       foothold locomotion is too difficult for PPO to traverse from
+A. Terrain Generation                                                  scratch; without a structured prior, the policy consistently
+                                                                       collapses to a local optimum (e.g., standing still). To overcome
+   We construct a family of procedurally generated stepping-
+                                                                       this, we adopt a teacher-student distillation framework de-
+stone terrains with randomized geometric properties. A terrain
+                                                                       signed to provide the student policy with a robust initialization
+instance is drawn from four terrain types: upstairs, downstairs,
+                                                                       prior. The pipeline proceeds in three steps, outlined in Fig. 2:
+flat stepping stones, and height-varying stepping stones. These
+terrains differ in their sagittal spacing, vertical offsets, and the     1) Teacher Training: A privileged teacher policy is first
+periodicity of the stone sequence.                                          optimized to master basic locomotion (standing and
+   We adopt a difficulty-indexed terrain sampling that incre-               walking) on nominal terrain. This phase leverages the
+mentally expands the geometric variability of the stones. In                full CLF-based reward structure and ground-truth phase
+general, at low difficulty, the stones are placed with small                information to generate dynamically consistent motion.
+gaps with less variation and less vertical variation (if any). As        2) Distillation (Warm Start): We distill this basic compe-
+difficulty increases, the allowable sagittal gap widens toward              tence into the student policy using behavior cloning.
+the maximum stone spacing; the stone height offsets expand                  This step removes the dependency on privileged infor-
+symmetrically to introduce positive and negative elevation                  mation, effectively ”warm-starting” the student with a
+changes. Each episode consists of a procedurally generated                  stable, non-privileged walking prior.
+terrain with parameters sampled from:                                    3) Curriculum Fine-tuning: Finally, the initialized student is
+   • Gap distance: [ 0.3, 0.3 + 0.4d ]m
+                                                                            trained via PPO on the full stepping-stone curriculum.
+   • Height variation: [ −0.2d, 0.2d ]m
+                                                                            Because the distillation phase positions the student in
+   • Stone x: [ 0.13, 0.3 ]m
+                                                                            a favorable region of the optimization landscape, it
+   • Stone z: [ 0.75, 1.25 ]m
+                                                                            can successfully adapt to the challenging height-varying
+   • Stair depth: [ 0.2, 0.3 ]m
+                                                                            stones and injected noise.
+   • Absolute stair height: [ 0., 0.2d ]m                              The student policy operates with deployable observations:
+where d ∈ [0, 1] represents terrain difficulty and corresponds           • Command Vector ct ∈ Rd : encodes task-specific infor-
+to 10 discrete terrain levels. These parameters govern the                 mation such as desired velocity.
+                                                                                               proprio
+placement, shape, and elevation of each stone. In addition,              • Proprioception ot             ∈ Rn : consists of base angular
+the supporting platform under the stones is randomized within              velocity ω t , projected gravity vector g t , joint positions,
+a bounded vertical range [0, −1]m. This produces a unified                 and joint velocities.
+                                                                                              extero
+progression across all types of terrains, forcing the policy to          • Exteroception ot          : a local 1m×1m heightmap, with
+learn generalizable stepping behaviors that remain stable under            grid size 0.1m, capturing terrain geometry.
+                                                                                                       21
+variations in gap width, vertical spread, and platform height.           • Last Action at−1 ∈ R
+                                                                                                                                                      6
+
+
+
+                                                                                                                TABLE I
+                                                                                        S UCCESS RATE ACROSS TERRAIN CONDITIONS FOR BASELINE ,
+                                                                                                 ABLATIONS , AND THE PROPOSED METHOD .
+
+                                                                                    Terrain                  Baseline   Fixed żcom   Fixed T   Proposed
+                                                                                    Flat (mid difficulty)    0.92896        1            1         1
+                                                                                    Flat (high difficulty)   0.55762     0.99854         1         1
+                                                                                    Height-varying (mid)        0        0.99194      0.99902      1
+                                                                                    Height-varying (high)       0        0.94116      0.87915   0.97217
+Fig. 4. (Left) The CLF reward curves during student policy training for
+the model-guided policies. The proposed method obtains better tracking than
+both the Fixed żcom and Fixed T methods. (Right) A comparison between
+the model-guided policies and a naive policy; the naive policy is not able to      rejection, we apply random velocity perturbations to the base
+handle the more difficult terrains.                                                during training, with linear velocities up to 0.5 m/s and angular
+                                                                                   velocities up to 0.4 rad/s.
+                                                                                   Baseline Construction: As prior stepping-stone RL frame-
+                                                                                   works do not release implementation details, we implement
+                                                                                   our own direct end-to-end RL baseline. To ensure a fair com-
+                                                                                   parison, the baseline uses the same student-level observation
+                                                                                   space, identical PPO hyperparameters, and the reward structure
+                                                                                   provided by the Unitree RL Lab [36]. When trained directly
+Fig. 5. The swing foot (left) and CoM (right) tracking in the x direction.         on the full stepping-stone environment, the policy immediately
+Precise foot tracking is critical to hit constrained footholds, and CoM tracking   collapses to standing and makes no learning progress. To give
+is particularly good around contact, improving performance on future stones.
+                                                                                   the baseline the best possible chance, we adopt a two-stage
+                                                                                   curriculum: the policy is first pre-trained for 2k iterations on
+The actions at ∈ R21 encode desired angles for the 12                              nominal flat-ground walking, and then fine-tuned exclusively
+lower body joints, waist yaw joint, as well as 8 upper body                        on flat stepping stones. This modified curriculum allows the
+joints. A PD controller is used for the low-level tracking with                    baseline to achieve non-zero performance on simple terrains
+desired joint velocities trivially zero. Additionally, the teacher                 for comparison.
+policy has access to privileged inputs, including stance foot
+                                                                                   Ablation Construction: In addition to the end-to-end RL
+and phase-related CLF terms and targeted swing foot position
+                                                                                   baseline, we conduct two ablations to isolate the contribution
+given terrain information and current stance foot location.
+                                                                                   of each component in the model-based reference: fixed step
+   During teacher training and distillation, all observations
+                                                                                   timing (T = 0.4 s) and no momentum shaping (udes = 0).
+are noise-free to ensure stable supervision. After distillation,
+the student policy is fine-tuned using reinforcement learning
+with deployable observations and injected noise to enhance                         A. Quantitative Results
+generalization. The fine-tuning stage uses the same reward
+                                                                                   Comparison with End-to-end Baseline: Across all exper-
+without access to teacher supervision or privileged inputs. This
+                                                                                   iments, the proposed model-guided RL policy and its two
+two-stage pipeline enables the student policy to first acquire
+                                                                                   ablations demonstrate consistent and stable learning behavior,
+structured behavior from a privileged teacher and then adapt
+                                                                                   rapidly converging to high performance. In contrast, the end-
+to noisy and partial observations during fine-tuning for real-
+                                                                                   to-end baseline improves only on flat stepping stones. While
+world deployment readiness.
+                                                                                   it learns to traverse flat stones, it saturates at a much lower
+                                                                                   curriculum level and ultimately converges to an asymmetric
+                               V. R ESULTS                                         period-2 gait, consistent with findings in [22].
+   All training is performed using a 21-DoF Unitree G1                                This contrast highlights a key limitation of pure RL: without
+humanoid in IsaacLab [34] with IsaacSim [35] physics engine.                       model-based structure, the policy struggles to discover the
+The robot is tasked with traversing randomized stepping-stone                      precise, height-aware foot placements necessary for stepping-
+terrains and stair terrains. The policy outputs desired joint                      stone locomotion. Our model-guided approach leverages the
+position targets at 50 Hz, which are tracked by a low-level                        RoM-based planner references to efficiently acquire feasible
+PD controller.                                                                     stepping strategies and refine them throughout training. No-
+Hyperparameters: We train using PPO with 4096 parallel                             tably, as reported in Table I, it attains 100% success on
+environments using an MLP network with [512, 256, 128]                             challenging flat stepping stones, compared to only 56% for
+hidden dimensions. Each policy is trained for 16k iterations                       the end-to-end RL baseline. The success rate is evaluated over
+from the initial flat ground walking policy. Details for training                  4096 environments.
+parameters are provided in Table II in the Appendix.                               Ablation Analysis: To understand the contribution of each
+Domain Randomization: To facilitate sim-to-real transfer,                          component in the model-guided RL pipeline, we conduct
+we apply standard domain randomization to the robot’s in-                          ablation studies that remove either (i) step timing adapta-
+ertial properties, like CoM position and base mass. Contact                        tion or (ii) vertical COM momentum regulation. The CLF-
+dynamics are randomized with friction coefficients sampled                         reward traces (Fig. 4, left) show that all model-guided variants
+uniformly between 0.4 and 1.0. Noise is injected into obser-                       learn rapidly and stably, exhibiting a consistent upward trend
+vations, including the elevation map. To enhance disturbance                       throughout training. The full proposed method achieves the
+                                                                                                                                                                                          7
+
+
+
+
+                  Up and down stairs      Height-invariant stones              Height-varying stones          Sparse and narrow stones        Mixed (out of dist., emergent robustness)
+
+Fig. 6. Snapshots of humanoid locomotion over a long stepping-stone course in MuJoCo simulation.
+
+Fixed step time                              Fixed vertical momentum shaping
+
+
+
+
+             Undesirable foot placement
+                                             Substantial lateral drift
+                                                                                                 Sim-to-sim                              Sim-to-real
+
+
+Fig. 7. Snapshots of sim-to-sim ablation trials.                                                Fig. 8. Comparison of sim-to-sim and sim-to-real snapshots.
+
+
+highest CLF reward, reflecting better satisfaction of the model-                                consistent, transferable locomotion strategies. For instance, the
+based stability objective. Removing vertical COM regulation                                     fixed T case exhibits inaccurate robot foot placements and
+                                                                                                                                          −
+lowers performance, while fixing the step timing produces                                       undesirable flight phases; In the fixed żcom case, the robot has
+more pronounced degradation, with slower improvement and                                        significant y-direction drift.
+reduced steady-state reward. Interestingly, RL remains robust                                      Additionally, the resulting policy from the proposed method
+even under these ablations: despite the missing structure,                                      is robust to withstand external perturbations during stepping-
+the policies partially compensate by rediscovering surrogate                                    stone traversal, such as unknown pushes to the robot body in
+strategies—either by implicitly regulating momentum through                                     the range of ±100Nm for a 0.2s duration. We refer readers to
+other reward channels or by learning to “survive” with less                                     the supplementary videos for more details.
+structured behavior.
+                                                                                                C. Real-World Transfer
+   Across evaluation terrains, all model-guided approaches
+achieve high success rates in simpler settings, including both                                     To evaluate our learned policy on hardware, we adopt a
+difficulty levels of flat stepping stones and the mid-difficulty                                deployment pipeline similar to the GR-1 system described
+height-varying terrain. The advantage of the proposed method                                    in [23]. The robot’s pose is tracked using a Qualisys motion
+becomes particularly evident on the most challenging height-                                    capture system, and elevation maps are constructed by ray-
+varying task, where it outperforms both ablations (Table I).                                    casting onto a pre-designed terrain mesh that matches the
+                                                                                                physical testbed. Figure 1 shows gait tiles extracted from
+                                                                                                hardware rollouts of the G1 robot. The proposed controller
+B. Simulation Evaluation                                                                        produces a stable and repeatable stepping pattern with con-
+   The high success rates on challenging terrain can be at-                                     sistent swing trajectories and smooth torso motion, closely
+tributed to the policy’s ability to track the model-based refer-                                matching the behavior observed in simulation, as seen in
+ences, as illustrated in Fig. 5. The proposed method exhibits                                   Fig. 8. The tiles illustrate that the learned policy maintains
+precise tracking of the swing foot and CoM trajectories in the                                  foot placement accuracy and gait symmetry despite unmodeled
+sagittal direction. To assess the generality and robustness of                                  dynamics, actuator latency, and real-world disturbances. These
+the learned locomotion strategies before transfer to hardware,                                  results confirm that the model-guided structure enables reliable
+we perform a sim-to-sim transfer study in which all final                                       hardware deployment without additional tuning.
+policies are deployed in a separate MuJoCo environment with                                        Beyond standard evaluations, we challenged the policy with
+independently parameterized dynamics, contact models, and                                       a mixed stepping-stone course featuring irregular stone depths,
+actuator responses. As shown in Fig. 6, the proposed method                                     which is a configuration absent from the training curriculum.
+successfully traverses an extended, mixed-terrain course that                                   Despite this distribution shift, the policy generalized success-
+includes up-and-down stairs, height-invariant stepping stones,                                  fully (Fig. 1, top). This suggests that the model-guided refer-
+height-varying stones with large vertical offsets, sparse and                                   ences prevent the policy from overfitting to fixed geometric
+narrow footholds, and an out-of-distribution mixed sequence                                     templates, enabling zero-shot generalization to unstructured
+designed to probe emergent robustness. These results highlight                                  terrain topologies.
+that the reduced-order structure embedded in the proposed
+approach not only accelerates learning but also significantly                                                        VI. C ONCLUSION
+enhances transferability across simulation platforms.                                              In this work, we presented a model-guided RL framework
+   Moreover, the ablated policies exhibit reduced sim-to-sim                                    that bridges the gap between the precision of model-based
+transfer reliability, as reflected in gait irregularities and incon-                            planning and the robustness of data-driven control for bipedal
+sistent stepping patterns observed in the gait tiles (Fig. 7).                                  locomotion on constrained terrains. By integrating a reduced-
+This sensitivity underscores the stabilizing role of both step                                  order stepping planner directly into the training loop, we gen-
+timing adaptation and vertical COM regulation in promoting                                      erated dynamically consistent references to guide the policy
+                                                                                                                                                                   8
+
+
+
+toward feasible motion manifolds without over-constraining                         [19] H. Duan, A. Malik, M. S. Gadde, J. Dao, A. Fern, and J. Hurst,
+the learning process. The successful zero-shot transfer to both                         “Learning Dynamic Bipedal Walking Across Stepping Stones,” in 2022
+                                                                                        IEEE/RSJ International Conference on Intelligent Robots and Systems
+a disparate physics simulator and physical hardware high-                               (IROS), Oct. 2022, pp. 6746–6752, iSSN: 2153-0866.
+lights the framework’s effectiveness and robustness, offering a                    [20] H. Duan, A. Malik, J. Dao, A. Saxena, K. Green, J. Siekmann, A. Fern,
+promising direction for deploying agile humanoids in complex,                           and J. Hurst, “Sim-to-Real Learning of Footstep-Constrained Bipedal
+                                                                                        Dynamic Walking,” 2022, p. 7.
+unstructured environments.                                                         [21] M. Kim, B. Acosta, P. Chaudhari, and M. Posa, “Learning a Vision-
+                                                                                        Based Footstep Planner for Hierarchical Walking Control,” in 2025
+                                                                                        IEEE-RAS 24th International Conference on Humanoid Robots (Hu-
+                               R EFERENCES                                              manoids), Sep. 2025, pp. 1–8, iSSN: 2164-0580.
+ [1] R. J. Griffin, G. Wiedebach, S. McCrory, S. Bertrand, I. Lee, and J. Pratt,   [22] H. Wang, Z. Wang, J. Ren, Q. Ben, T. Huang, W. Zhang, and
+     “Footstep Planning for Autonomous Walking Over Rough Terrain,” in                  J. Pang, “BeamDojo: Learning Agile Humanoid Locomotion on Sparse
+     2019 IEEE-RAS 19th International Conference on Humanoid Robots                     Footholds,” in Proceedings of Robotics: Science and Systems, Los
+     (Humanoids), Oct. 2019, pp. 9–16.                                                  Angeles, CA, USA, Jun. 2025.
+ [2] B. Ponton, M. Khadiv, A. Meduri, and L. Righetti, “Efficient Multicon-        [23] J. He, C. Zhang, F. Jenelten, R. Grandia, M. BÄcher, and M. Hutter,
+     tact Pattern Generation With Sequential Convex Approximations of the               “Attention-Based Map Encoding for Learning Generalized Legged Lo-
+     Centroidal Dynamics,” IEEE Transactions on Robotics, vol. 37, no. 5,               comotion,” Science Robotics, vol. 10, no. 105, p. eadv3604, Aug. 2025.
+     pp. 1661–1679, Oct. 2021.                                                     [24] Q. Liao, T. E. Truong, X. Huang, G. Tevet, K. Sreenath, and C. K. Liu,
+ [3] Y. Kojio, Y. Omori, K. Kojima, F. Sugai, Y. Kakiuchi, K. Okada, and                “BeyondMimic: From Motion Tracking to Versatile Humanoid Control
+     M. Inaba, “Footstep Modification Including Step Time and Angular                   via Guided Diffusion,” Aug. 2025, arXiv:2508.08241 [cs].
+     Momentum Under Disturbances on Sparse Footholds,” IEEE Robotics               [25] F. Liu, Z. Gu, Y. Cai, Z. Zhou, H. Jung, J. Jang, S. Zhao, S. Ha, Y. Chen,
+     and Automation Letters, vol. 5, no. 3, pp. 4907–4914, Jul. 2020.                   D. Xu et al., “Opt2skill: Imitating dynamically-feasible whole-body
+ [4] R. Deits and R. Tedrake, “Footstep Planning on Uneven Terrain with                 trajectories for versatile humanoid loco-manipulation,” IEEE Robotics
+     Mixed-Integer Convex Optimization,” in 2014 IEEE-RAS International                 and Automation Letters, 2025.
+     Conference on Humanoid Robots, 2014, pp. 279–286.                             [26] W. Suliman, E. Davydenko, E. Chaikovskaia, and R. Gorbachev, “Re-
+ [5] N. Perrin, O. Stasse, L. Baudouin, F. Lamiraux, and E. Yoshida, “Fast              inforcement Learning-Based Footstep Control for Humanoid Robots on
+     Humanoid Robot Collision-Free Footstep Planning Using Swept Volume                 Complex Terrain,” IEEE Access, vol. 13, pp. 178 931–178 944, 2025.
+     Approximations,” IEEE Transactions on Robotics, vol. 28, no. 2, pp.           [27] H. J. Lee, S. Hong, and S. Kim, “Integrating Model-Based Footstep
+     427–439, Apr. 2012.                                                                Planning with Model-Free Reinforcement Learning for Dynamic Legged
+ [6] J. W. Grizzle, C. Chevallereau, R. W. Sinnet, and A. D. Ames, “Models,             Locomotion,” in 2024 IEEE/RSJ International Conference on Intelligent
+     feedback control, and open problems of 3D bipedal robotic walking,”                Robots and Systems (IROS), Oct. 2024, pp. 11 248–11 255, iSSN: 2153-
+     Automatica, vol. 50, no. 8, pp. 1955–1988, Aug. 2014.                              0866.
+ [7] Q. Nguyen, A. Hereid, J. W. Grizzle, A. D. Ames, and K. Sreenath, “3D         [28] F. Jenelten, J. He, F. Farshidian, and M. Hutter, “DTC: Deep Tracking
+     dynamic walking on stepping stones with control barrier functions,” in             Control,” Science Robotics, vol. 9, no. 86, p. eadh5401, Jan. 2024.
+     2016 IEEE 55th Conference on Decision and Control (CDC). Las                  [29] K. Li, Z. Olkin, Y. Yue, and A. D. Ames, “CLF-RL: Control
+     Vegas, NV, USA: IEEE, Dec. 2016, pp. 827–834.                                      Lyapunov Function Guided Reinforcement Learning,” Aug. 2025,
+ [8] Q. Nguyen, A. Agrawal, W. Martin, H. Geyer, and K. Sreenath,                       arXiv:2508.09354 [cs].
+     “Dynamic bipedal locomotion over stochastic discrete terrain,” The            [30] M. Khadiv, A. Herzog, S. A. A. Moosavian, and L. Righetti, “Walking
+     International Journal of Robotics Research, vol. 37, no. 13-14, pp. 1537–          Control Based on Step Timing Adaptation,” IEEE Transactions on
+     1553, Dec. 2018.                                                                   Robotics, vol. 36, no. 3, pp. 629–643, Jun. 2020.
+ [9] M. Dai, X. Xiong, and A. Ames, “Bipedal Walking on Constrained                [31] J. Li, Z. Duan, J. Ma, and Q. Nguyen, “Gait-Net-augmented Implicit
+     Footholds: Momentum Regulation via Vertical COM Control,” in 2022                  Kino-dynamic MPC for Dynamic Variable-frequency Humanoid Loco-
+     International Conference on Robotics and Automation (ICRA), May                    motion over Discrete Terrains,” in Robotics: Science and Systems XXI,
+     2022, pp. 10 435–10 441.                                                           vol. 21, Jun. 2025.
+[10] B. Acosta and M. Posa, “Bipedal Walking on Constrained Footholds              [32] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov, “Prox-
+     with MPC Footstep Control,” Sep. 2023, arXiv:2309.07993 [cs].                      imal Policy Optimization Algorithms,” Aug. 2017, arXiv:1707.06347
+[11] Z. Xiang, V. Paredes, and A. Hereid, “Adaptive Step Duration for Precise           [cs].
+     Foot Placement: Achieving Robust Bipedal Locomotion on Terrains with          [33] X. Xiong and A. Ames, “3-D Underactuated Bipedal Walking via H-LIP
+     Restricted Footholds,” Mar. 2024, arXiv:2403.17136 [cs, eess].                     Based Gait Synthesis and Stepping Stabilization,” IEEE Transactions on
+[12] M. F. Fallon, P. Marion, R. Deits, T. Whelan, M. Antone, J. McDonald,              Robotics, vol. 38, no. 4, pp. 2405–2425, Aug. 2022.
+     and R. Tedrake, “Continuous humanoid locomotion over uneven terrain           [34] M. Mittal et al., “Isaac lab: A gpu-accelerated simulation framework for
+     using stereo fusion,” in 2015 IEEE-RAS 15th International Conference               multi-modal robot learning,” arXiv preprint arXiv:2511.04831, 2025.
+     on Humanoid Robots (Humanoids), Nov. 2015, pp. 881–888.                       [35] NVIDIA, “Nvidia isaac sim,” https://developer.nvidia.com/isaac/sim,
+[13] B. Acosta and M. Posa, “Perceptive Mixed-Integer Footstep Control                  2024.
+     for Underactuated Bipedal Walking on Rough Terrain,” May 2025,                [36] U. Robotics, “Unitree rl lab,” https://github.com/unitreerobotics/unitree
+     arXiv:2501.19391 [cs].                                                             rl lab, 2024.
+[14] M. Fallon and M. Antone, “Plane Seg – Robustly and Efficiently Ex-
+     tracting Contact Regions from Depth Data,” https://github.com/ori-drs/
+     plane seg, 2019.                                                                                              A PPENDIX
+[15] W. Cui, S. Li, H. Huang, B. Qin, T. Zhang, hanjinchao, L. Zheng,                                            TABLE II
+     Z. Tang, C. Hu, N. Yan, J. Chen, and Z. Jiang, “Adapting Humanoid               S UMMARY OF TRAINING CONFIGURATIONS USED FOR PPO TRAINING ,
+     Locomotion over Challenging Terrain via Two-Phase Training,” Sep.                   PPO FINE - TUNING , AND STUDENT– TEACHER DISTILLATION .
+     2024.
+[16] X. Gu, Y.-J. Wang, X. Zhu, C. Shi, Y. Guo, Y. Liu, and J. Chen,                Parameter                    PPO Train       PPO Finetune       Distillation
+     “Advancing Humanoid Locomotion: Mastering Challenging Terrains                 Steps per environment            24                24              120
+     with Denoising World Model Learning,” in Robotics: Science and                 Init noise std                   1.0               1.0             0.1
+     Systems XX. Robotics: Science and Systems Foundation, Jul. 2024.               Learning rate                 1×10−3            1×10−4           5×10−4
+[17] Z. Xie, H. Y. Ling, N. H. Kim, and M. v. d. Panne, “ALLSTEPS:                  Entropy coefficient             0.008             0.003             —
+     Curriculum-driven Learning of Stepping Stone Skills,” Aug. 2020,               Clip parameter                   0.2               0.1              —
+     arXiv:2005.04323 [cs].                                                         Learning epochs                   5                 5               10
+[18] R. P. Singh, M. Benallegue, M. Morisawa, R. Cisneros, and F. Kane-             Grad norm max                    1.0               1.0             2.0
+     hiro, “Learning Bipedal Walking On Planned Footsteps For Humanoid              Loss type                   clipped PPO       clipped PPO         Huber
+     Robots,” in 2022 IEEE-RAS 21st International Conference on Humanoid            Distillation gradient len        —                 —                 2
+     Robots (Humanoids), Nov. 2022, pp. 686–693, iSSN: 2164-0580.
+
